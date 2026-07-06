@@ -3,7 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 import { createDb } from "./db/client.js";
+import { HackerOneClient, searchPrograms, upsertHackerOnePrograms } from "./platforms/hackerone.js";
+import { loadSecrets } from "./secrets.js";
 
 const server = new McpServer({
   name: "bountybrain",
@@ -27,7 +30,57 @@ server.registerTool(
 async function main() {
   const dbPath = `${process.env.HOME ?? "."}/.config/bountybrain/bountybrain.db`;
   mkdirSync(dirname(dbPath), { recursive: true });
-  createDb(dbPath);
+  const db = createDb(dbPath);
+  const secrets = loadSecrets();
+
+  server.registerTool(
+    "hackerone_sync_programs",
+    {
+      description: "Read-only sync of the authenticated researcher's accessible HackerOne programs into SQLite.",
+      inputSchema: {},
+    },
+    async () => {
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
+      if (!username || !token) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const client = new HackerOneClient(username, token);
+      const rawPrograms = await client.fetchPrograms();
+      const rows = upsertHackerOnePrograms(db, rawPrograms);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ synced: rows.length }, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "search_programs",
+    {
+      description: "Search locally synced bug bounty programs. Read-only; never calls a platform API.",
+      inputSchema: {
+        platform: z.string().optional(),
+        query: z.string().optional(),
+        bounty_only: z.boolean().optional(),
+      },
+    },
+    async ({ platform, query, bounty_only }) => {
+      const rows = searchPrograms(db, { platform, query, bounty_only });
+      return {
+        content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+      };
+    },
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
