@@ -13,6 +13,8 @@ Early HackerOne tracer bullet. The server currently has:
 - `ping`
 - `hackerone_sync_programs`
 - `search_programs`
+- `hackerone_sync_scopes`
+- `search_scopes`
 
 See [issue #1](https://github.com/mswell/bountybrain/issues/1) for the roadmap.
 
@@ -95,6 +97,40 @@ Example filter:
 }
 ```
 
+### `hackerone_sync_scopes`
+
+Read-only sync of a HackerOne program's in-scope/out-of-scope assets (structured
+scopes) into the local SQLite `scopes` table.
+
+Inputs:
+
+- `handle` required string — the HackerOne program handle, e.g. `acme`
+
+Requirements: same `HACKERONE_USERNAME`/`HACKERONE_TOKEN`/`600` permissions as
+`hackerone_sync_programs`. Read-only — does not write, comment, or mutate any
+platform-side data.
+
+### `search_scopes`
+
+Searches locally synced scopes. It does not call HackerOne.
+
+Inputs:
+
+- `platform` optional string, for example `hackerone`
+- `program` optional exact match on program handle
+- `asset` optional substring matched against the asset identifier
+- `bounty_only` optional boolean
+
+Example filter:
+
+```json
+{
+  "program": "acme",
+  "asset": "api",
+  "bounty_only": true
+}
+```
+
 ## Manual Validation Checklist
 
 Before release, run one live read-only validation against a real HackerOne
@@ -110,6 +146,11 @@ researcher account:
 7. Call `search_programs` with `platform`, `query`, and `bounty_only` filters
    independently and combined.
 8. Confirm the SQLite `programs.raw_json` field preserves the source payload.
+9. Call `hackerone_sync_scopes` with a real program handle.
+10. Call `search_scopes` with no filters and confirm scope rows are returned.
+11. Call `search_scopes` with `platform`, `program`, `asset`, and `bounty_only`
+    filters independently and combined.
+12. Confirm the SQLite `scopes.raw_json` field preserves the source payload.
 
 Do not use production automation credentials in CI. The automated test suite
 uses mocked HackerOne API responses only.

@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { createDb } from "./db/client.js";
-import { HackerOneClient, searchPrograms, upsertHackerOnePrograms } from "./platforms/hackerone.js";
+import { HackerOneClient, searchPrograms, searchScopes, upsertHackerOnePrograms, upsertHackerOneScopes } from "./platforms/hackerone.js";
 import { loadSecrets } from "./secrets.js";
 
 const server = new McpServer({
@@ -76,6 +76,59 @@ async function main() {
     },
     async ({ platform, query, bounty_only }) => {
       const rows = searchPrograms(db, { platform, query, bounty_only });
+      return {
+        content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "hackerone_sync_scopes",
+    {
+      description:
+        "Read-only sync of a HackerOne program's in-scope/out-of-scope assets into SQLite.",
+      inputSchema: {
+        handle: z.string().min(1),
+      },
+    },
+    async ({ handle }) => {
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
+      if (!username || !token) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const client = new HackerOneClient(username, token);
+      const rawScopes = await client.fetchScopes(handle);
+      const rows = upsertHackerOneScopes(db, handle, rawScopes);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ synced: rows.length }, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "search_scopes",
+    {
+      description: "Search locally synced bug bounty scopes. Read-only; never calls a platform API.",
+      inputSchema: {
+        platform: z.string().optional(),
+        program: z.string().optional(),
+        asset: z.string().optional(),
+        bounty_only: z.boolean().optional(),
+      },
+    },
+    async ({ platform, program, asset, bounty_only }) => {
+      const rows = searchScopes(db, { platform, program, asset, bounty_only });
       return {
         content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
       };

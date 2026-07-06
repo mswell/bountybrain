@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- HackerOne scope sync and search: `hackerone_sync_scopes(handle)` fetches a
+  program's structured scopes (in-scope/out-of-scope assets) from the
+  HackerOne API and upserts them into the local `scopes` table; `search_scopes`
+  queries them by `platform`, `program`, `asset` substring, and
+  `bounty_only`, independently or combined. Closes #4.
+
 ### Security
 
 - Bumped `vitest` devDependency from `^2.1.0` to `^3.2.6`, pulling in patched
