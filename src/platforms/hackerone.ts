@@ -71,10 +71,22 @@ export interface SearchReportsFilters {
   severity?: string;
 }
 
+export interface HackerOneAuthProbeResult {
+  valid: boolean;
+  status: number | null;
+  reason: string;
+}
+
+export interface HackerOneAuthCheckResult extends HackerOneAuthProbeResult {
+  platform: "hackerone";
+  checked_at: string;
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const HACKERONE_PROGRAMS_URL = "https://api.hackerone.com/v1/hackers/programs";
 const HACKERONE_REPORTS_URL = "https://api.hackerone.com/v1/hackers/me/reports";
+const HACKERONE_AUTH_CHECK_URL = `${HACKERONE_PROGRAMS_URL}?page%5Bsize%5D=1`;
 
 function hackerOneScopesUrl(handle: string): string {
   return `https://api.hackerone.com/v1/hackers/programs/${handle}/structured_scopes`;
@@ -414,6 +426,53 @@ export function searchReports(db: Database.Database, filters: SearchReportsFilte
   return db.prepare(sql).all(params) as HackerOneReportRow[];
 }
 
+export function recordHackerOneAuthCheck(db: Database.Database, result: HackerOneAuthCheckResult): void {
+  db.prepare(`
+    INSERT INTO auth_state (platform, last_verified_at, last_failed_at, notes)
+    VALUES (@platform, @last_verified_at, @last_failed_at, @notes)
+    ON CONFLICT(platform) DO UPDATE SET
+      last_verified_at = COALESCE(excluded.last_verified_at, auth_state.last_verified_at),
+      last_failed_at = COALESCE(excluded.last_failed_at, auth_state.last_failed_at),
+      notes = excluded.notes
+  `).run({
+    platform: result.platform,
+    last_verified_at: result.valid ? result.checked_at : null,
+    last_failed_at: result.valid ? null : result.checked_at,
+    notes: JSON.stringify({
+      valid: result.valid,
+      status: result.status,
+      reason: result.reason,
+      checked_at: result.checked_at,
+    }),
+  });
+}
+
+export async function checkHackerOneAuth(
+  db: Database.Database,
+  client: HackerOneClient,
+  checkedAt: string = new Date().toISOString(),
+): Promise<HackerOneAuthCheckResult> {
+  let probe: HackerOneAuthProbeResult;
+
+  try {
+    probe = await client.checkAuth();
+  } catch (err) {
+    probe = {
+      valid: false,
+      status: null,
+      reason: `HackerOne auth check failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const result: HackerOneAuthCheckResult = {
+    platform: "hackerone",
+    checked_at: checkedAt,
+    ...probe,
+  };
+  recordHackerOneAuthCheck(db, result);
+  return result;
+}
+
 export class HackerOneClient {
   private readonly fetchImpl: FetchLike;
 
@@ -425,16 +484,36 @@ export class HackerOneClient {
     this.fetchImpl = fetchImpl;
   }
 
+  private authHeaders(): Record<string, string> {
+    return {
+      accept: "application/json",
+      authorization: `Basic ${Buffer.from(`${this.username}:${this.token}`).toString("base64")}`,
+    };
+  }
+
+  async checkAuth(): Promise<HackerOneAuthProbeResult> {
+    const res = await this.fetchImpl(HACKERONE_AUTH_CHECK_URL, {
+      headers: this.authHeaders(),
+    });
+
+    if (res.ok) {
+      return { valid: true, status: res.status, reason: "authenticated" };
+    }
+
+    return {
+      valid: false,
+      status: res.status,
+      reason: `HackerOne auth check failed with HTTP ${res.status}`,
+    };
+  }
+
   async fetchPrograms(): Promise<unknown[]> {
     const programs: unknown[] = [];
     let nextUrl: string | null = HACKERONE_PROGRAMS_URL;
 
     while (nextUrl) {
       const res = await this.fetchImpl(nextUrl, {
-        headers: {
-          accept: "application/json",
-          authorization: `Basic ${Buffer.from(`${this.username}:${this.token}`).toString("base64")}`,
-        },
+        headers: this.authHeaders(),
       });
 
       if (!res.ok) {
@@ -455,10 +534,7 @@ export class HackerOneClient {
 
     while (nextUrl) {
       const res = await this.fetchImpl(nextUrl, {
-        headers: {
-          accept: "application/json",
-          authorization: `Basic ${Buffer.from(`${this.username}:${this.token}`).toString("base64")}`,
-        },
+        headers: this.authHeaders(),
       });
 
       if (!res.ok) {
@@ -479,10 +555,7 @@ export class HackerOneClient {
 
     while (nextUrl) {
       const res = await this.fetchImpl(nextUrl, {
-        headers: {
-          accept: "application/json",
-          authorization: `Basic ${Buffer.from(`${this.username}:${this.token}`).toString("base64")}`,
-        },
+        headers: this.authHeaders(),
       });
 
       if (!res.ok) {

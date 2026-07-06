@@ -5,7 +5,16 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { createDb } from "./db/client.js";
-import { HackerOneClient, searchPrograms, searchReports, searchScopes, upsertHackerOnePrograms, upsertHackerOneReports, upsertHackerOneScopes } from "./platforms/hackerone.js";
+import {
+  checkHackerOneAuth,
+  HackerOneClient,
+  searchPrograms,
+  searchReports,
+  searchScopes,
+  upsertHackerOnePrograms,
+  upsertHackerOneReports,
+  upsertHackerOneScopes,
+} from "./platforms/hackerone.js";
 import { loadSecrets } from "./secrets.js";
 
 const server = new McpServer({
@@ -78,6 +87,46 @@ async function main() {
       const rows = searchPrograms(db, { platform, query, bounty_only });
       return {
         content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "check_auth",
+    {
+      description: "Validate read-only platform credentials and update local auth_state without storing secrets.",
+      inputSchema: {
+        platform: z.string(),
+      },
+    },
+    async ({ platform }) => {
+      if (platform !== "hackerone") {
+        return {
+          content: [{ type: "text", text: `Unsupported platform: ${platform}` }],
+          isError: true,
+        };
+      }
+
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
+      if (!username || !token) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const client = new HackerOneClient(username, token);
+      const result = await checkHackerOneAuth(db, client);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        isError: !result.valid,
       };
     },
   );

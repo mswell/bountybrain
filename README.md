@@ -11,6 +11,7 @@ See [`PRD.md`](./PRD.md) for the full product/architecture rationale.
 Early HackerOne tracer bullet. The server currently has:
 
 - `ping`
+- `check_auth`
 - `hackerone_sync_programs`
 - `search_programs`
 - `hackerone_sync_scopes`
@@ -62,6 +63,19 @@ Registers as a standard stdio MCP server — add it to your MCP client
 (Pi, Claude Desktop, Claude Code, etc.) config pointing at `dist/server.js`.
 
 ## Tools
+
+### `check_auth`
+
+Validates configured platform credentials and records the result in the local
+SQLite `auth_state` table without storing any credential values.
+
+Inputs:
+
+- `platform` required string. Currently supported: `hackerone`
+
+For HackerOne, this performs a lightweight read-only request to
+`GET /hackers/programs?page[size]=1`. It does not call any write-capable
+HackerOne endpoint.
 
 ### `hackerone_sync_programs`
 
@@ -141,16 +155,20 @@ researcher account:
 2. Run `chmod 600 ~/.config/bountybrain/secrets.env`.
 3. Run `npm run build`.
 4. Start the MCP server with `npm start` through a local MCP client.
-5. Call `hackerone_sync_programs`.
-6. Call `search_programs` with no filters and confirm program rows are returned.
-7. Call `search_programs` with `platform`, `query`, and `bounty_only` filters
+5. Call `check_auth` with `platform = "hackerone"` and confirm it returns
+   `valid: true`.
+6. Confirm the SQLite `auth_state` row has `last_verified_at` set and does not
+   contain the HackerOne token in `notes`.
+7. Call `hackerone_sync_programs`.
+8. Call `search_programs` with no filters and confirm program rows are returned.
+9. Call `search_programs` with `platform`, `query`, and `bounty_only` filters
    independently and combined.
-8. Confirm the SQLite `programs.raw_json` field preserves the source payload.
-9. Call `hackerone_sync_scopes` with a real program handle.
-10. Call `search_scopes` with no filters and confirm scope rows are returned.
-11. Call `search_scopes` with `platform`, `program`, `asset`, and `bounty_only`
+10. Confirm the SQLite `programs.raw_json` field preserves the source payload.
+11. Call `hackerone_sync_scopes` with a real program handle.
+12. Call `search_scopes` with no filters and confirm scope rows are returned.
+13. Call `search_scopes` with `platform`, `program`, `asset`, and `bounty_only`
     filters independently and combined.
-12. Confirm the SQLite `scopes.raw_json` field preserves the source payload.
+14. Confirm the SQLite `scopes.raw_json` field preserves the source payload.
 
 Do not use production automation credentials in CI. The automated test suite
 uses mocked HackerOne API responses only.

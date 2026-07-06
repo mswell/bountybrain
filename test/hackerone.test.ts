@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDb } from "../src/db/client.js";
 import {
+  checkHackerOneAuth,
   HackerOneClient,
   normalizeHackerOneProgram,
   normalizeHackerOneReport,
@@ -274,6 +275,54 @@ describe("HackerOne program fetch", () => {
       "https://api.hackerone.com/v1/hackers/me/reports",
       "https://api.hackerone.com/v1/hackers/me/reports?page=2",
     ]);
+  });
+
+  it("checks HackerOne auth and records successful verification without storing credentials", async () => {
+    const db = createDb(":memory:");
+    const requested: string[] = [];
+    const client = new HackerOneClient("alice", "token", async (input, init) => {
+      requested.push(input);
+      expect(init?.headers).toMatchObject({
+        accept: "application/json",
+        authorization: `Basic ${Buffer.from("alice:token").toString("base64")}`,
+      });
+
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+
+    const result = await checkHackerOneAuth(db, client, now);
+    const row = db.prepare("SELECT * FROM auth_state WHERE platform = ?").get("hackerone") as Record<string, unknown>;
+
+    expect(requested).toEqual(["https://api.hackerone.com/v1/hackers/programs?page%5Bsize%5D=1"]);
+    expect(result).toMatchObject({ platform: "hackerone", valid: true, status: 200, checked_at: now });
+    expect(row.last_verified_at).toBe(now);
+    expect(row.last_failed_at).toBeNull();
+    expect(String(row.notes)).not.toContain("token");
+
+    db.close();
+  });
+
+  it("checks HackerOne auth and records 401 failures without storing credentials", async () => {
+    const db = createDb(":memory:");
+    const client = new HackerOneClient("alice", "token", async () =>
+      new Response(JSON.stringify({ errors: [{ status: 401, detail: "Unauthorized" }] }), { status: 401 }),
+    );
+
+    const result = await checkHackerOneAuth(db, client, now);
+    const row = db.prepare("SELECT * FROM auth_state WHERE platform = ?").get("hackerone") as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      platform: "hackerone",
+      valid: false,
+      status: 401,
+      reason: "HackerOne auth check failed with HTTP 401",
+      checked_at: now,
+    });
+    expect(row.last_verified_at).toBeNull();
+    expect(row.last_failed_at).toBe(now);
+    expect(String(row.notes)).not.toContain("token");
+
+    db.close();
   });
 });
 
