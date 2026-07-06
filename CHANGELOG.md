@@ -1,0 +1,18 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Security
+
+- Bumped `vitest` devDependency from `^2.1.0` to `^3.2.6`, pulling in patched
+  transitive `vite` (`5.4.21` → `7.3.6`) and `esbuild` (`0.21.5` → `0.28.1`).
+  Resolves 5 Dependabot alerts: esbuild dev-server CORS (#1), vite path
+  traversal in `.map` handling (#2), vite `server.fs.deny` bypass on Windows
+  (#4), vite/launch-editor NTLMv2 hash disclosure on Windows (#5), and the
+  critical vitest UI arbitrary file read/exec issue (#3). `npm audit` reports
+  0 vulnerabilities after the bump.
