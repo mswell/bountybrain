@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSecrets, SecretsPermissionError } from "../src/secrets.js";
+import { loadRequiredSecrets, loadSecrets, SecretsPermissionError } from "../src/secrets.js";
 
 describe("loadSecrets", () => {
   let dir: string;
@@ -57,5 +57,30 @@ describe("loadSecrets", () => {
     } catch (err) {
       expect(String((err as Error).message)).not.toContain("super-secret-value");
     }
+  });
+
+  it("returns a tool-facing error when required secrets are missing", () => {
+    dir = mkdtempSync(join(tmpdir(), "bountybrain-secrets-"));
+    const file = join(dir, "secrets.env");
+    writeFileSync(file, "HACKERONE_USERNAME=alice");
+    chmodSync(file, 0o600);
+
+    expect(loadRequiredSecrets(["HACKERONE_USERNAME", "HACKERONE_TOKEN"], file)).toEqual({
+      ok: false,
+      message: `Missing HACKERONE_TOKEN in ${file}`,
+    });
+  });
+
+  it("turns unsafe secret-file permissions into a tool-facing error", () => {
+    dir = mkdtempSync(join(tmpdir(), "bountybrain-secrets-"));
+    const file = join(dir, "secrets.env");
+    writeFileSync(file, "HACKERONE_TOKEN=super-secret-value");
+    chmodSync(file, 0o644);
+
+    const result = loadRequiredSecrets(["HACKERONE_TOKEN"], file);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(`Refusing to read ${file}`);
+    expect(result.message).not.toContain("super-secret-value");
   });
 });

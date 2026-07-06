@@ -11,7 +11,11 @@ export class SecretsPermissionError extends Error {
   }
 }
 
-const DEFAULT_SECRETS_PATH = `${process.env.HOME ?? ""}/.config/bountybrain/secrets.env`;
+export const DEFAULT_SECRETS_PATH = `${process.env.HOME ?? ""}/.config/bountybrain/secrets.env`;
+
+export type RequiredSecretsResult =
+  | { ok: true; secrets: Record<string, string> }
+  | { ok: false; message: string };
 
 /**
  * Loads platform-prefixed secrets (e.g. HACKERONE_TOKEN, YESWEHACK_TOKEN)
@@ -45,4 +49,27 @@ export function loadSecrets(path: string = DEFAULT_SECRETS_PATH): Record<string,
   }
 
   return secrets;
+}
+
+/**
+ * Tool-facing secrets loader: returns a clear error for missing or unsafe
+ * credentials so one platform integration cannot crash the entire MCP server.
+ */
+export function loadRequiredSecrets(keys: string[], path: string = DEFAULT_SECRETS_PATH): RequiredSecretsResult {
+  let secrets: Record<string, string>;
+  try {
+    secrets = loadSecrets(path);
+  } catch (err) {
+    if (err instanceof SecretsPermissionError) {
+      return { ok: false, message: err.message };
+    }
+    throw err;
+  }
+
+  const missing = keys.filter((key) => !secrets[key]);
+  if (missing.length > 0) {
+    return { ok: false, message: `Missing ${missing.join(" or ")} in ${path}` };
+  }
+
+  return { ok: true, secrets };
 }
