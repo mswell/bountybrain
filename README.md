@@ -8,9 +8,13 @@ See [`PRD.md`](./PRD.md) for the full product/architecture rationale.
 
 ## Status
 
-Early scaffolding. No platform adapters or MCP tools are implemented yet
-beyond a health check (`ping`). See [issue #1](https://github.com/mswell/bountybrain/issues/1)
-for the roadmap.
+Early HackerOne tracer bullet. The server currently has:
+
+- `ping`
+- `hackerone_sync_programs`
+- `search_programs`
+
+See [issue #1](https://github.com/mswell/bountybrain/issues/1) for the roadmap.
 
 ## Requirements
 
@@ -54,6 +58,61 @@ npm start
 
 Registers as a standard stdio MCP server — add it to your MCP client
 (Pi, Claude Desktop, Claude Code, etc.) config pointing at `dist/server.js`.
+
+## Tools
+
+### `hackerone_sync_programs`
+
+Read-only sync of the authenticated researcher's accessible HackerOne programs
+into the local SQLite `programs` table.
+
+Requirements:
+
+- `HACKERONE_USERNAME` in `~/.config/bountybrain/secrets.env`
+- `HACKERONE_TOKEN` in `~/.config/bountybrain/secrets.env`
+- `secrets.env` mode set to `600`
+
+This tool only reads from HackerOne. It does not write, comment, change status,
+submit reports, or mutate any platform-side data.
+
+### `search_programs`
+
+Searches locally synced programs. It does not call HackerOne.
+
+Inputs:
+
+- `platform` optional string, for example `hackerone`
+- `query` optional substring matched against handle or name
+- `bounty_only` optional boolean
+
+Example filter:
+
+```json
+{
+  "platform": "hackerone",
+  "query": "acme",
+  "bounty_only": true
+}
+```
+
+## Manual Validation Checklist
+
+Before release, run one live read-only validation against a real HackerOne
+researcher account:
+
+1. Create `~/.config/bountybrain/secrets.env` with `HACKERONE_USERNAME` and
+   `HACKERONE_TOKEN`.
+2. Run `chmod 600 ~/.config/bountybrain/secrets.env`.
+3. Run `npm run build`.
+4. Start the MCP server with `npm start` through a local MCP client.
+5. Call `hackerone_sync_programs`.
+6. Call `search_programs` with no filters and confirm program rows are returned.
+7. Call `search_programs` with `platform`, `query`, and `bounty_only` filters
+   independently and combined.
+8. Confirm the SQLite `programs.raw_json` field preserves the source payload.
+
+Do not use production automation credentials in CI. The automated test suite
+uses mocked HackerOne API responses only.
 
 ## Development
 
