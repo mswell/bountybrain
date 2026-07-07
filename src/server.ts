@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { createDb } from "./db/client.js";
-import { HackerOneClient, searchPrograms, searchScopes, upsertHackerOnePrograms, upsertHackerOneScopes } from "./platforms/hackerone.js";
+import { HackerOneClient, searchPrograms, searchReports, searchScopes, upsertHackerOnePrograms, upsertHackerOneReports, upsertHackerOneScopes } from "./platforms/hackerone.js";
 import { loadSecrets } from "./secrets.js";
 
 const server = new McpServer({
@@ -129,6 +129,56 @@ async function main() {
     },
     async ({ platform, program, asset, bounty_only }) => {
       const rows = searchScopes(db, { platform, program, asset, bounty_only });
+      return {
+        content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "hackerone_sync_reports",
+    {
+      description: "Read-only sync of the authenticated researcher's personal HackerOne reports into SQLite.",
+      inputSchema: {},
+    },
+    async () => {
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
+      if (!username || !token) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const client = new HackerOneClient(username, token);
+      const rawReports = await client.fetchReports();
+      const rows = upsertHackerOneReports(db, rawReports);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ synced: rows.length }, null, 2) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    "search_reports",
+    {
+      description: "Search locally synced bug bounty reports. Read-only; never calls a platform API.",
+      inputSchema: {
+        platform: z.string().optional(),
+        program: z.string().optional(),
+        weakness: z.string().optional(),
+        severity: z.string().optional(),
+      },
+    },
+    async ({ platform, program, weakness, severity }) => {
+      const rows = searchReports(db, { platform, program, weakness, severity });
       return {
         content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
       };

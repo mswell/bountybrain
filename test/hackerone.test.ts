@@ -3,10 +3,13 @@ import { createDb } from "../src/db/client.js";
 import {
   HackerOneClient,
   normalizeHackerOneProgram,
+  normalizeHackerOneReport,
   normalizeHackerOneScope,
   searchPrograms,
+  searchReports,
   searchScopes,
   upsertHackerOnePrograms,
+  upsertHackerOneReports,
   upsertHackerOneScopes,
 } from "../src/platforms/hackerone.js";
 
@@ -246,5 +249,125 @@ describe("HackerOne program fetch", () => {
       "https://api.hackerone.com/v1/hackers/programs/acme/structured_scopes",
       "https://api.hackerone.com/v1/hackers/programs/acme/structured_scopes?page=2",
     ]);
+  });
+
+  it("fetches researcher's own reports with basic auth and pagination", async () => {
+    const requested: string[] = [];
+    const client = new HackerOneClient("alice", "token", async (input, init) => {
+      requested.push(input);
+      expect(init?.headers).toMatchObject({
+        accept: "application/json",
+        authorization: `Basic ${Buffer.from("alice:token").toString("base64")}`,
+      });
+
+      const page = input.endsWith("page=2")
+        ? { data: [{ id: "200" }], links: { next: null } }
+        : { data: [{ id: "100" }], links: { next: "https://api.hackerone.com/v1/hackers/me/reports?page=2" } };
+
+      return new Response(JSON.stringify(page), { status: 200 });
+    });
+
+    const reports = await client.fetchReports();
+
+    expect(reports).toEqual([{ id: "100" }, { id: "200" }]);
+    expect(requested).toEqual([
+      "https://api.hackerone.com/v1/hackers/me/reports",
+      "https://api.hackerone.com/v1/hackers/me/reports?page=2",
+    ]);
+  });
+});
+
+describe("HackerOne report sync/search", () => {
+  it("normalizes HackerOne API report payloads and preserves raw JSON", () => {
+    const row = normalizeHackerOneReport(
+      {
+        id: "12345",
+        type: "report",
+        attributes: {
+          title: "IDOR on /api/users",
+          state: "resolved",
+          vulnerability_information: "Steps to reproduce...",
+          created_at: "2025-01-01T00:00:00.000Z",
+          bounty_awarded_at: "2025-02-01T00:00:00.000Z",
+          disclosed_at: "2025-03-01T00:00:00.000Z",
+        },
+        relationships: {
+          severity: { data: { attributes: { rating: "high" } } },
+          weakness: { data: { attributes: { name: "Insecure Direct Object Reference", external_id: "CWE-639" } } },
+          bounties: { data: [{ attributes: { amount: "1000.00", bonus_amount: "0.00", awarded_currency: "USD" } }] },
+          program: { data: { attributes: { handle: "acme" } } },
+        },
+      },
+      now,
+    );
+
+    expect(row).toMatchObject({
+      id: "hackerone:12345",
+      platform: "hackerone",
+      program_handle: "acme",
+      title: "IDOR on /api/users",
+      state: "resolved",
+      severity_rating: "high",
+      weakness_name: "Insecure Direct Object Reference",
+      weakness_cwe: "CWE-639",
+      bounty_amount: 1000,
+      bounty_currency: "USD",
+      vulnerability_information: "Steps to reproduce...",
+      created_at: "2025-01-01T00:00:00.000Z",
+      bounty_awarded_at: "2025-02-01T00:00:00.000Z",
+      disclosed_at: "2025-03-01T00:00:00.000Z",
+      synced_at: now,
+    });
+    expect(JSON.parse(row.raw_json)).toMatchObject({ id: "12345" });
+  });
+
+  it("rejects payloads without a usable report id", () => {
+    expect(() => normalizeHackerOneReport({ attributes: { title: "No ID" } }, now)).toThrow(
+      "missing required report id",
+    );
+  });
+
+  it("upserts reports and supports combined search filters", () => {
+    const db = createDb(":memory:");
+
+    upsertHackerOneReports(
+      db,
+      [
+        {
+          id: "100",
+          attributes: { title: "XSS in search", state: "resolved", created_at: "2025-01-01T00:00:00.000Z" },
+          relationships: {
+            severity: { data: { attributes: { rating: "medium" } } },
+            weakness: { data: { attributes: { name: "Cross-site Scripting", external_id: "CWE-79" } } },
+            bounties: { data: [{ attributes: { amount: "500.00", bonus_amount: "0.00", awarded_currency: "USD" } }] },
+            program: { data: { attributes: { handle: "acme" } } },
+          },
+        },
+        {
+          id: "200",
+          attributes: { title: "SSRF via webhooks", state: "resolved", created_at: "2025-02-01T00:00:00.000Z" },
+          relationships: {
+            severity: { data: { attributes: { rating: "critical" } } },
+            weakness: { data: { attributes: { name: "Server-Side Request Forgery", external_id: "CWE-918" } } },
+            bounties: { data: [{ attributes: { amount: "3000.00", bonus_amount: "0.00", awarded_currency: "USD" } }] },
+            program: { data: { attributes: { handle: "other-corp" } } },
+          },
+        },
+      ],
+      now,
+    );
+
+    // All reports
+    expect(searchReports(db, { platform: "hackerone" })).toHaveLength(2);
+    // Filter by program
+    expect(searchReports(db, { program: "acme" }).map((r) => r.title)).toEqual(["XSS in search"]);
+    // Filter by weakness (substring match)
+    expect(searchReports(db, { weakness: "request forgery" }).map((r) => r.title)).toEqual(["SSRF via webhooks"]);
+    // Filter by severity
+    expect(searchReports(db, { severity: "critical" }).map((r) => r.title)).toEqual(["SSRF via webhooks"]);
+    // Combined filters that match nothing
+    expect(searchReports(db, { program: "acme", severity: "critical" })).toEqual([]);
+
+    db.close();
   });
 });

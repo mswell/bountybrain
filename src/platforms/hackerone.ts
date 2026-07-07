@@ -45,9 +45,36 @@ export interface SearchScopesFilters {
   bounty_only?: boolean;
 }
 
+export interface HackerOneReportRow {
+  id: string;
+  platform: "hackerone";
+  program_handle: string | null;
+  title: string | null;
+  state: string | null;
+  severity_rating: string | null;
+  weakness_name: string | null;
+  weakness_cwe: string | null;
+  bounty_amount: number;
+  bounty_currency: string | null;
+  vulnerability_information: string | null;
+  created_at: string | null;
+  bounty_awarded_at: string | null;
+  disclosed_at: string | null;
+  raw_json: string;
+  synced_at: string;
+}
+
+export interface SearchReportsFilters {
+  platform?: string;
+  program?: string;
+  weakness?: string;
+  severity?: string;
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const HACKERONE_PROGRAMS_URL = "https://api.hackerone.com/v1/hackers/programs";
+const HACKERONE_REPORTS_URL = "https://api.hackerone.com/v1/hackers/me/reports";
 
 function hackerOneScopesUrl(handle: string): string {
   return `https://api.hackerone.com/v1/hackers/programs/${handle}/structured_scopes`;
@@ -256,6 +283,137 @@ export function searchScopes(db: Database.Database, filters: SearchScopesFilters
   return db.prepare(sql).all(params) as HackerOneScopeRow[];
 }
 
+export function normalizeHackerOneReport(raw: unknown, syncedAt: string): HackerOneReportRow {
+  const record = asRecord(raw);
+  const attributes = asRecord(record.attributes);
+  const relationships = asRecord(record.relationships);
+
+  const reportId = stringValue(record.id);
+  if (!reportId) {
+    throw new Error("HackerOne report is missing required report id");
+  }
+
+  // Extract nested relationships
+  const severityData = asRecord(asRecord(relationships.severity).data);
+  const severityAttrs = asRecord(severityData.attributes);
+
+  const weaknessData = asRecord(asRecord(relationships.weakness).data);
+  const weaknessAttrs = asRecord(weaknessData.attributes);
+
+  const programData = asRecord(asRecord(relationships.program).data);
+  const programAttrs = asRecord(programData.attributes);
+
+  // Sum bounties
+  const bountiesRel = asRecord(relationships.bounties);
+  const bountiesArray = Array.isArray(bountiesRel.data) ? bountiesRel.data : [];
+  let bountyAmount = 0;
+  let bountyCurrency: string | null = null;
+  for (const b of bountiesArray) {
+    const bAttrs = asRecord(asRecord(b).attributes);
+    const amount = parseFloat(String(bAttrs.amount ?? "0")) + parseFloat(String(bAttrs.bonus_amount ?? "0"));
+    bountyAmount += amount;
+    if (!bountyCurrency) bountyCurrency = stringValue(bAttrs.awarded_currency);
+  }
+
+  return {
+    id: `hackerone:${reportId}`,
+    platform: "hackerone",
+    program_handle: stringValue(programAttrs.handle),
+    title: stringValue(attributes.title),
+    state: stringValue(attributes.state),
+    severity_rating: stringValue(severityAttrs.rating),
+    weakness_name: stringValue(weaknessAttrs.name),
+    weakness_cwe: stringValue(weaknessAttrs.external_id),
+    bounty_amount: bountyAmount,
+    bounty_currency: bountyCurrency,
+    vulnerability_information: stringValue(attributes.vulnerability_information),
+    created_at: stringValue(attributes.created_at),
+    bounty_awarded_at: stringValue(attributes.bounty_awarded_at),
+    disclosed_at: stringValue(attributes.disclosed_at),
+    raw_json: JSON.stringify(raw),
+    synced_at: syncedAt,
+  };
+}
+
+export function upsertHackerOneReports(
+  db: Database.Database,
+  rawReports: unknown[],
+  syncedAt: string = new Date().toISOString(),
+): HackerOneReportRow[] {
+  const rows = rawReports.map((report) => normalizeHackerOneReport(report, syncedAt));
+  const stmt = db.prepare(`
+    INSERT INTO reports (
+      id, platform, program_handle, title, state, severity_rating,
+      weakness_name, weakness_cwe, bounty_amount, bounty_currency,
+      vulnerability_information, created_at, bounty_awarded_at, disclosed_at, raw_json, synced_at
+    )
+    VALUES (
+      @id, @platform, @program_handle, @title, @state, @severity_rating,
+      @weakness_name, @weakness_cwe, @bounty_amount, @bounty_currency,
+      @vulnerability_information, @created_at, @bounty_awarded_at, @disclosed_at, @raw_json, @synced_at
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      platform = excluded.platform,
+      program_handle = excluded.program_handle,
+      title = excluded.title,
+      state = excluded.state,
+      severity_rating = excluded.severity_rating,
+      weakness_name = excluded.weakness_name,
+      weakness_cwe = excluded.weakness_cwe,
+      bounty_amount = excluded.bounty_amount,
+      bounty_currency = excluded.bounty_currency,
+      vulnerability_information = excluded.vulnerability_information,
+      created_at = excluded.created_at,
+      bounty_awarded_at = excluded.bounty_awarded_at,
+      disclosed_at = excluded.disclosed_at,
+      raw_json = excluded.raw_json,
+      synced_at = excluded.synced_at
+  `);
+
+  const tx = db.transaction((items: HackerOneReportRow[]) => {
+    for (const item of items) stmt.run(item);
+  });
+  tx(rows);
+
+  return rows;
+}
+
+export function searchReports(db: Database.Database, filters: SearchReportsFilters = {}): HackerOneReportRow[] {
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (filters.platform) {
+    where.push("platform = @platform");
+    params.platform = filters.platform;
+  }
+
+  if (filters.program) {
+    where.push("program_handle = @program");
+    params.program = filters.program;
+  }
+
+  if (filters.weakness) {
+    where.push("LOWER(COALESCE(weakness_name, '')) LIKE @weakness");
+    params.weakness = `%${filters.weakness.toLowerCase()}%`;
+  }
+
+  if (filters.severity) {
+    where.push("severity_rating = @severity");
+    params.severity = filters.severity;
+  }
+
+  const sql = `
+    SELECT id, platform, program_handle, title, state, severity_rating,
+           weakness_name, weakness_cwe, bounty_amount, bounty_currency,
+           vulnerability_information, created_at, bounty_awarded_at, disclosed_at, raw_json, synced_at
+    FROM reports
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY created_at DESC
+  `;
+
+  return db.prepare(sql).all(params) as HackerOneReportRow[];
+}
+
 export class HackerOneClient {
   private readonly fetchImpl: FetchLike;
 
@@ -289,6 +447,30 @@ export class HackerOneClient {
     }
 
     return programs;
+  }
+
+  async fetchReports(): Promise<unknown[]> {
+    const reports: unknown[] = [];
+    let nextUrl: string | null = HACKERONE_REPORTS_URL;
+
+    while (nextUrl) {
+      const res = await this.fetchImpl(nextUrl, {
+        headers: {
+          accept: "application/json",
+          authorization: `Basic ${Buffer.from(`${this.username}:${this.token}`).toString("base64")}`,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`HackerOne reports request failed with HTTP ${res.status}`);
+      }
+
+      const body = (await res.json()) as HackerOneProgramApiResponse;
+      if (Array.isArray(body.data)) reports.push(...body.data);
+      nextUrl = body.links?.next ?? null;
+    }
+
+    return reports;
   }
 
   async fetchScopes(handle: string): Promise<unknown[]> {

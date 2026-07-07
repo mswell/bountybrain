@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HackerOne report sync and search: `hackerone_sync_reports` fetches the
+  authenticated researcher's personal reports from the HackerOne API and
+  upserts them into the local `reports` table; `search_reports` queries them
+  by `platform`, `program`, `weakness` (substring), and `severity` (exact),
+  independently or combined. Closes #5.
+
 - HackerOne scope sync and search: `hackerone_sync_scopes(handle)` fetches a
   program's structured scopes (in-scope/out-of-scope assets) from the
   HackerOne API and upserts them into the local `scopes` table; `search_scopes`
