@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wellpunk/bountybrain"
+    "url": "https://github.com/mswell/bountybrain"
   },
   "bin": {
     "bountybrain": "./dist/server.js"
