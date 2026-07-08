@@ -5,8 +5,16 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { createDb } from "./db/client.js";
-import { HackerOneClient, searchPrograms, searchReports, searchScopes, upsertHackerOnePrograms, upsertHackerOneReports, upsertHackerOneScopes } from "./platforms/hackerone.js";
-import { loadSecrets } from "./secrets.js";
+import {
+  HackerOneClient,
+  searchPrograms,
+  searchReports,
+  searchScopes,
+  upsertHackerOnePrograms,
+  upsertHackerOneReports,
+  upsertHackerOneScopes,
+} from "./platforms/hackerone.js";
+import { loadRequiredSecrets } from "./secrets.js";
 
 const server = new McpServer({
   name: "bountybrain",
@@ -31,7 +39,6 @@ async function main() {
   const dbPath = `${process.env.HOME ?? "."}/.config/bountybrain/bountybrain.db`;
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = createDb(dbPath);
-  const secrets = loadSecrets();
 
   server.registerTool(
     "hackerone_sync_programs",
@@ -40,19 +47,17 @@ async function main() {
       inputSchema: {},
     },
     async () => {
-      const username = secrets.HACKERONE_USERNAME;
-      const token = secrets.HACKERONE_TOKEN;
-      if (!username || !token) {
+      const credentials = loadRequiredSecrets(["HACKERONE_USERNAME", "HACKERONE_TOKEN"]);
+      if (!credentials.ok) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
-            },
-          ],
+          content: [{ type: "text", text: credentials.message }],
           isError: true,
         };
       }
+
+      const secrets = credentials.secrets;
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
 
       const client = new HackerOneClient(username, token);
       const rawPrograms = await client.fetchPrograms();
@@ -92,19 +97,17 @@ async function main() {
       },
     },
     async ({ handle }) => {
-      const username = secrets.HACKERONE_USERNAME;
-      const token = secrets.HACKERONE_TOKEN;
-      if (!username || !token) {
+      const credentials = loadRequiredSecrets(["HACKERONE_USERNAME", "HACKERONE_TOKEN"]);
+      if (!credentials.ok) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
-            },
-          ],
+          content: [{ type: "text", text: credentials.message }],
           isError: true,
         };
       }
+
+      const secrets = credentials.secrets;
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
 
       const client = new HackerOneClient(username, token);
       const rawScopes = await client.fetchScopes(handle);
@@ -142,19 +145,17 @@ async function main() {
       inputSchema: {},
     },
     async () => {
-      const username = secrets.HACKERONE_USERNAME;
-      const token = secrets.HACKERONE_TOKEN;
-      if (!username || !token) {
+      const credentials = loadRequiredSecrets(["HACKERONE_USERNAME", "HACKERONE_TOKEN"]);
+      if (!credentials.ok) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Missing HACKERONE_USERNAME or HACKERONE_TOKEN in ~/.config/bountybrain/secrets.env",
-            },
-          ],
+          content: [{ type: "text", text: credentials.message }],
           isError: true,
         };
       }
+
+      const secrets = credentials.secrets;
+      const username = secrets.HACKERONE_USERNAME;
+      const token = secrets.HACKERONE_TOKEN;
 
       const client = new HackerOneClient(username, token);
       const rawReports = await client.fetchReports();
